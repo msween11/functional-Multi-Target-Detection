@@ -43,32 +43,6 @@ end
 
 M = @(x) M(x)+ noise(x);
 
-% MTD PLOT FOR PROPOSAL
-
-
-mtdplot = tiledlayout(1,3, 'TileSpacing','tight')
-ax1 = nexttile;
-
-plot(ax1, D,f(D), LineWidth=2)
-axis square
-ax2 = nexttile;
-plot(ax2, x, M(x), LineWidth=2)
-axis square
-
-sigma = 1; lambda = 0.1;
-covr = @(x) (sigma^2)*exp(-abs(x-x').^2./(2*lambda^2)); 
-noise = @(x) mvnrnd(zeros(1,length(covr(x))),covr(x), 1);
-
-M = @(x) zeros(1,length(x));
-for i = 1:n
-    M = @(x) M(x) + f(x-shifts(i));
-end
-
-M = @(x) M(x)+ noise(x);
-ax3 = nexttile;
-plot(ax3, x,M(x), LineWidth=2)
-axis square
-
 
 %% Constructing A_3M(z_1,z_2)
 N = 3*(n+1); l = 5; B = 10;
@@ -85,6 +59,7 @@ disp('data evaluation starting')
 %function evaluation is SLOW
 datastrip = M(X);
 disp('data evaluation done')
+
 %shifting is just moving the window
 data = zeros(length(x), length(D));
 for i=1:length(D)
@@ -92,6 +67,7 @@ for i=1:length(D)
     data(:,i) = datastrip(length(X)/4+j:3*length(X)/4-1+j);
 end
 %%
+
 %lags / integrating range have to be carefully chosen....
 A3M = zeros(length(D));
 
@@ -181,4 +157,5 @@ figure
 hold on
 plot(D, recspace)
 plot(D, f(D))
+
 
