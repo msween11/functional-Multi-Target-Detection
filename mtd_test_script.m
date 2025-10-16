@@ -1,50 +1,5 @@
 rng(1);
-symfft = @(x) ifftshift(fft(fftshift(x)));
-
-% SIGNAL
-f2 = @(x) (1/6)*( 0.* (x<0)+...
-    (x.^3) .* (0<= x & x < 1)+...
-    (-3*(x-1).^3 + 3*(x-1).^2+3*(x-1)+1) .* (1<= x & x < 2)+...
-    (3*(x-2).^3-6*(x-2).^2+4) .* (2 <= x & x < 3)+...
-    ((4-x).^3) .* (3 <=x & x < 4)+...
-    0 .* (x >= 4));
-f2 = @(x) f2(2*x+2);
-f2 = @(x) f2(x) + f2(pi*x);
-nrm = @(x) max(abs(f2(x)));
-f = @(x) f2(x) / nrm(x);
-
-%% ----REJECTION SAMPLING
-
-n = 5; shifts = zeros(1,n);
-
-for i = 2:n
-    a = -3*i; b = 3*i; Z= [];
-    while isempty(Z) == 1
-        Z = a + (b-a).*rand;
-        if min(abs(Z-shifts)) < 3
-            Z = [];
-        end
-        Z(Z>=-3*(i-1) & Z<=3*(i-1)) = [] ; %enforcing density
-    end
-    shifts(i) = Z;
-end
-% shifts
-
-
-%%  Constructing M(t)
-sigma = .1; lambda = 0.1;
-covr = @(x) (sigma^2)*exp(-abs(x-x').^2./(2*lambda^2)); 
-noise = @(x) mvnrnd(zeros(1,length(covr(x))),covr(x), 1);
-
-M = @(x) zeros(1,length(x));
-for i = 1:n
-    M = @(x) M(x) + f(x-shifts(i));
-end
-
-M = @(x) M(x)+ noise(x);
-
-
-%% Constructing A_3M(z_1,z_2)
+n = 1000; 
 N = 3*(n+1); l = 5; B = 10;
 x=-N:2^(-l):N-2^(-l);
 X=-2*N:2^(-l):2*N-2^(-l);
@@ -53,33 +8,86 @@ Dext = -3*B:2^(-l):3*B-2^(-l);
 Wext = -pi*(2^l):(pi/(3*B)):pi*(2^l)-(pi/(3*B)); 
 wgap = Wext(2) - Wext(1);
 L = length(Wext);
-%%
-disp('data evaluation starting')
-%evaluate M on extra large window X to make shifting easier.
-%function evaluation is SLOW
-datastrip = M(X);
-disp('data evaluation done')
 
+symfft = @(x) ifftshift(fft(fftshift(x)));
+
+f2 = @(x) (1/6).*( 0.* (x<0)+...
+    (x.^3) .* (0<= x & x < 1)+...
+    (-3*(x-1).^3 + 3*(x-1).^2+3*(x-1)+1) .* (1<= x & x < 2)+...
+    (3*(x-2).^3-6*(x-2).^2+4) .* (2 <= x & x < 3)+...
+    ((4-x).^3) .* (3 <=x & x < 4)+...
+    0 .* (x >= 4));
+f2 = @(x) f2(2.*x+2);
+f2 = @(x) f2(x) + f2(pi.*x);
+nrm = @(x) max(abs(f2(x)));
+f = @(x) f2(x) ./ nrm(x);
+%% SAMPLING SHIFTS
+
+s = -3 + 6*rand(1, n); s(1) = abs(s(1)); %enforcing parity
+shifts = zeros(1,n);
+
+evenidx = 2:2:n;
+shifts(evenidx) = -3*evenidx + s(evenidx - 1);
+
+oddidx = 3:2:n;
+shifts(oddidx) = 3*oddidx + s(oddidx - 1);
+
+%%  CONSTRUCTING M(t)...slowest chunk...not sure how to speed up?
+M = zeros(1,length(X));
+
+for j = 1:n 
+    Y = X - shifts(j);
+    [~, c] = min(abs(Y));
+    M = M + [zeros(1,c-64) f(Y(c-64:c+64)) ...
+        zeros(1,length(X)-length(zeros(1,c-64)) - length(f(Y(c-64:c+64))))];
+    % disp(j)
+end
+
+
+%% CONSTRUCTING NOISE 
+
+sigma = .5; lambda = 1;
+rho = @(h) (sigma^2)*exp(-abs(h(1)-h(2)).^2./(2*lambda^2)); 
+ep = stationary_Gaussian_process(1,length(X), rho); 
+datastrip = M + ep;
+
+%% CONSTRUCTING A3M
 %shifting is just moving the window
 data = zeros(length(x), length(D));
 for i=1:length(D)
     j = D(i)*2^l;
     data(:,i) = datastrip(length(X)/4+j:3*length(X)/4-1+j);
 end
-%%
 
-%lags / integrating range have to be carefully chosen....
-A3M = zeros(length(D));
+v = data(:, length(D)/2 + 1);   
+A3M = (1/n)*2^(-l) * ((data .* v)' * data); 
 
-for i = 1:length(D)
-    for  j = 1:length(D)
-        A3M(i,j) = 2^(-l)*sum(data(:,length(D)/2+1).*data(:,i).*data(:,j));
-    end
-end
-clear('data');
+%% UNBIASING... DOES NOT WORK
+% int = integral(f,-1,1);
+% bias = sigma^2*int; 
+% covr = @(x) (sigma^2)*exp(-abs(x).^2./(2*lambda^2)); 
+% temp = zeros(1,length(D));
+% for i = 1:length(D)
+%     temp(i) = rho([D(length(D)/2+1),D(i)]);
+% end
+% temp2 = covr(D).*integral(f,-1,1);
+% 
+% for i = 1:length(D)
+%     A3M(i,:) = A3M(i,:)-(integral(f,-1,1)*temp);
+% end
+% 
+% A3M(1:(length(D)+1):length(D)^2) =...
+%     A3M(1:(length(D)+1):length(D)^2) - bias;
+% 
+% A3M(:,length(D)/2+1) = A3M(:,length(D)/2+1) - bias;
+% A3M(length(D)/2+1,:) = A3M(length(D)/2+1,:) - bias;
+% %check larger lambda, shouldn't be constant......
+% figure
+% imagesc(A3M)
+% 
 
-%%
-A3M = (1/n)*A3M;
+
+%% PADDING A3M AND MAPPING INTO FREQUENCY 
 
 n1 = length(D);
 n2 = length(Dext);
@@ -89,9 +97,6 @@ A3M_padded = [zeros(nside,n2); zeros(n1,nside) A3M zeros(n1,nside); zeros(nside,
 F = dftmtx(length(Dext));
 A3M_ft = center_BS(F'*center_BS(A3M_padded)*F);
 
-%% Unbiasing for A3M
-u = integral(f,-1,1)*sigma^2*n;
-u = 1/u;
 
 %% DOING KOTLARSKI NOW
 
@@ -111,7 +116,7 @@ for j = 2:length(Wext)/2
     rec_emp(j) = rec_emp(j-1) + wgap*integrand_emp( length(Wext)/2 +j);
 end
 
-r = 1; h = 0.02;
+r = .0001; h = 0.05;
 psireg = psihat./(L*min(ones(length(Wext))/L, r*sqrt(n)*abs(psihat)));
 
 ad_reg = diag(psireg);
@@ -157,5 +162,4 @@ figure
 hold on
 plot(D, recspace)
 plot(D, f(D))
-
 
