@@ -1,9 +1,10 @@
 rng(1);
-n = 1000; 
+n = 10000; 
 N = 3*(n+1); l = 5; B = 10;
 x=-N:2^(-l):N-2^(-l);
+dx = 2^(-l);
 X=-2*N:2^(-l):2*N-2^(-l);
-D = -3:2^(-l):3-2^(-l);
+D = -2:2^(-l):2-dx;
 Dext = -3*B:2^(-l):3*B-2^(-l);
 Wext = -pi*(2^l):(pi/(3*B)):pi*(2^l)-(pi/(3*B)); 
 wgap = Wext(2) - Wext(1);
@@ -21,39 +22,47 @@ f2 = @(x) f2(2.*x+2);
 f2 = @(x) f2(x) + f2(pi.*x);
 nrm = @(x) max(abs(f2(x)));
 f = @(x) f2(x) ./ nrm(x);
-%% SAMPLING SHIFTS
 
-s = -3 + 6*rand(1, n); s(1) = abs(s(1)); %enforcing parity
+% SAMPLING SHIFTS
+
+s = -3 + 6*rand(1, n); s(1) = abs(s(1)); 
 shifts = zeros(1,n);
 
-evenidx = 2:2:n;
-shifts(evenidx) = -3*evenidx + s(evenidx - 1);
-
-oddidx = 3:2:n;
-shifts(oddidx) = 3*oddidx + s(oddidx - 1);
-
-%%  CONSTRUCTING M(t)...slowest chunk...not sure how to speed up?
-M = zeros(1,length(X));
-
-for j = 1:n 
-    Y = X - shifts(j);
-    [~, c] = min(abs(Y));
-    M = M + [zeros(1,c-64) f(Y(c-64:c+64)) ...
-        zeros(1,length(X)-length(zeros(1,c-64)) - length(f(Y(c-64:c+64))))];
-    % disp(j)
+for k = 2:2:n
+    shifts(k) = -3*k + s(k-1);
+    if k >2 && abs(shifts(k) - shifts(k-2)) < 3
+        shifts(k) = shifts(k-2) - 3 * sign(shifts(k) - shifts(k-2));
+    end
 end
 
+for k = 3:2:n
+    shifts(k) = 3*k + s(k-1);
+    if abs(shifts(k) - shifts(k-2)) < 3
+        shifts(k) = shifts(k-2) + 3 * sign(shifts(k) - shifts(k-2));
+    end
+end
 
-%% CONSTRUCTING NOISE 
+%  CONSTRUCTING M(t)...slowest chunk...not sure how to speed up?
+M = zeros(1,length(X));
+origin = length(X)/2;
+func = f(-2:2^(-l):2);
+dd = (length(func)-1)/2;
+for j = 1:n 
+    c = origin + round(shifts(j)*(2^l));
+    M(c-dd:c+dd) = M(c-dd:c+dd) + func;
+end
+% CONSTRUCTING NOISE 
 
-sigma = .5; lambda = 1;
-rho = @(h) (sigma^2)*exp(-abs(h(1)-h(2)).^2./(2*lambda^2)); 
-ep = stationary_Gaussian_process(1,length(X), rho); 
+sigma = .5; lambda = .1; 
+% rho = @(h) (sigma^2)*exp(-abs(h(1)-h(2)).^2./(2*lambda^2)); 
+ep = fast_gp_nonperiodic(length(X), dx, sigma, lambda);
 datastrip = M + ep;
 
+
 %% CONSTRUCTING A3M
-%shifting is just moving the window
-data = zeros(length(x), length(D));
+%shifting is just moving the window, on the grid now
+tic
+data = zeros(length(x), length(D)); %data for A3M
 for i=1:length(D)
     j = D(i)*2^l;
     data(:,i) = datastrip(length(X)/4+j:3*length(X)/4-1+j);
@@ -61,32 +70,14 @@ end
 
 v = data(:, length(D)/2 + 1);   
 A3M = (1/n)*2^(-l) * ((data .* v)' * data); 
+old = A3M;
+toc
 
-%% UNBIASING... DOES NOT WORK
-% int = integral(f,-1,1);
-% bias = sigma^2*int; 
-% covr = @(x) (sigma^2)*exp(-abs(x).^2./(2*lambda^2)); 
-% temp = zeros(1,length(D));
-% for i = 1:length(D)
-%     temp(i) = rho([D(length(D)/2+1),D(i)]);
-% end
-% temp2 = covr(D).*integral(f,-1,1);
-% 
-% for i = 1:length(D)
-%     A3M(i,:) = A3M(i,:)-(integral(f,-1,1)*temp);
-% end
-% 
-% A3M(1:(length(D)+1):length(D)^2) =...
-%     A3M(1:(length(D)+1):length(D)^2) - bias;
-% 
-% A3M(:,length(D)/2+1) = A3M(:,length(D)/2+1) - bias;
-% A3M(length(D)/2+1,:) = A3M(length(D)/2+1,:) - bias;
-% %check larger lambda, shouldn't be constant......
-% figure
-% imagesc(A3M)
-% 
+%%  UNBIASING  
 
-
+covr = @(x) (sigma^2)*exp(-abs(x).^2./(2*lambda^2)); 
+u = covr(D)*integral(f,-1,1);
+A3M = A3M-u-u'-(integral(f,-1,1)*covr(D-D'));
 %% PADDING A3M AND MAPPING INTO FREQUENCY 
 
 n1 = length(D);
@@ -116,7 +107,7 @@ for j = 2:length(Wext)/2
     rec_emp(j) = rec_emp(j-1) + wgap*integrand_emp( length(Wext)/2 +j);
 end
 
-r = .0001; h = 0.05;
+r = .00001; h = 0.05;
 psireg = psihat./(L*min(ones(length(Wext))/L, r*sqrt(n)*abs(psihat)));
 
 ad_reg = diag(psireg);
