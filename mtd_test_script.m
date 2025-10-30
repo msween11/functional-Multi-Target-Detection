@@ -61,7 +61,6 @@ datastrip = M + ep;
 
 %% CONSTRUCTING A3M
 %shifting is just moving the window, on the grid now
-tic
 data = zeros(length(x), length(D)); %data for A3M
 for i=1:length(D)
     j = D(i)*2^l;
@@ -70,8 +69,7 @@ end
 
 v = data(:, length(D)/2 + 1);   
 A3M = (1/n)*2^(-l) * ((data .* v)' * data); 
-old = A3M;
-toc
+
 
 %%  UNBIASING  
 
