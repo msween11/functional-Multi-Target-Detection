@@ -1,5 +1,5 @@
 rng(1);
-n = 10000; 
+n = 100000; 
 N = 3*(n+1); l = 5; B = 10;
 x=-N:2^(-l):N-2^(-l);
 dx = 2^(-l);
@@ -60,17 +60,40 @@ datastrip = M + ep;
 
 
 %% CONSTRUCTING A3M
-%shifting is just moving the window, on the grid now
-data = zeros(length(x), length(D)); %data for A3M
-for i=1:length(D)
-    j = D(i)*2^l;
-    data(:,i) = datastrip(length(X)/4+j:3*length(X)/4-1+j);
+tic
+try
+    data = zeros(length(x), length(D)); %data for A3M
+    for i=1:length(D)
+        j = D(i)*2^l;
+        data(:,i) = datastrip(length(X)/4+j:3*length(X)/4-1+j);
+    end
+
+    v = data(:, length(D)/2 + 1);   
+    A3M = (1/n)*2^(-l) * ((data .* v)' * data); 
+
+catch ME
+    if strcmp(ME.identifier,'MATLAB:array:SizeLimitExceeded')
+        fprintf('Vectorized method exceeded memory limits — switching to streaming.\n');
+
+        A3M = zeros(length(D));
+        j = length(D)/2 + 1;
+        datastrip_trunc = datastrip(length(X)/4+j:3*length(X)/4-1+j);
+       
+        for i = 1:length(D) 
+            ii = D(i)*(2^l);
+            di = datastrip_trunc .* datastrip(length(X)/4+ii:3*length(X)/4-1+ii);
+            for  j = 1:length(D)/2
+                jj = D(i)*2^l;
+                A3M(i,j) = 2^(-l)*dot(di,...
+                    datastrip(length(X)/4+jj:3*length(X)/4-1+jj));
+            end
+        end
+    else
+        rethrow(ME);
+    end
 end
-
-v = data(:, length(D)/2 + 1);   
-A3M = (1/n)*2^(-l) * ((data .* v)' * data); 
-
-
+fprintf('A3M constructed. \n');
+toc
 %%  UNBIASING  
 
 covr = @(x) (sigma^2)*exp(-abs(x).^2./(2*lambda^2)); 
