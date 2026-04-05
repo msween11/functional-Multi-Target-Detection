@@ -1,0 +1,177 @@
+rng(1);
+n = 100000; 
+N = 3*(n+1); l = 5; B = 10;
+x=-N:2^(-l):N-2^(-l);
+dx = 2^(-l);
+X=-2*N:2^(-l):2*N-2^(-l);
+D = -2:2^(-l):2-dx;
+Dext = -3*B:2^(-l):3*B-2^(-l);
+Wext = -pi*(2^l):(pi/(3*B)):pi*(2^l)-(pi/(3*B)); 
+wgap = Wext(2) - Wext(1);
+L = length(Wext);
+
+symfft = @(x) ifftshift(fft(fftshift(x)));
+
+f2 = @(x) (1/6).*( 0.* (x<0)+...
+    (x.^3) .* (0<= x & x < 1)+...
+    (-3*(x-1).^3 + 3*(x-1).^2+3*(x-1)+1) .* (1<= x & x < 2)+...
+    (3*(x-2).^3-6*(x-2).^2+4) .* (2 <= x & x < 3)+...
+    ((4-x).^3) .* (3 <=x & x < 4)+...
+    0 .* (x >= 4));
+f2 = @(x) f2(2.*x+2);
+f2 = @(x) f2(x) + f2(pi.*x);
+nrm = @(x) max(abs(f2(x)));
+f = @(x) f2(x) ./ nrm(x);
+
+% SAMPLING SHIFTS
+
+s = -3 + 6*rand(1, n); s(1) = abs(s(1)); 
+shifts = zeros(1,n);
+
+for k = 2:2:n
+    shifts(k) = -3*k + s(k-1);
+    if k >2 && abs(shifts(k) - shifts(k-2)) < 3
+        shifts(k) = shifts(k-2) - 3 * sign(shifts(k) - shifts(k-2));
+    end
+end
+
+for k = 3:2:n
+    shifts(k) = 3*k + s(k-1);
+    if abs(shifts(k) - shifts(k-2)) < 3
+        shifts(k) = shifts(k-2) + 3 * sign(shifts(k) - shifts(k-2));
+    end
+end
+
+%  CONSTRUCTING M(t)...slowest chunk...not sure how to speed up?
+M = zeros(1,length(X));
+origin = length(X)/2;
+func = f(-2:2^(-l):2);
+dd = (length(func)-1)/2;
+for j = 1:n 
+    c = origin + round(shifts(j)*(2^l));
+    M(c-dd:c+dd) = M(c-dd:c+dd) + func;
+end
+% CONSTRUCTING NOISE 
+
+sigma = .5; lambda = .1; 
+% rho = @(h) (sigma^2)*exp(-abs(h(1)-h(2)).^2./(2*lambda^2)); 
+ep = fast_gp_nonperiodic(length(X), dx, sigma, lambda);
+datastrip = M + ep;
+
+
+%% CONSTRUCTING A3M
+tic
+try
+    data = zeros(length(x), length(D)); %data for A3M
+    for i=1:length(D)
+        j = D(i)*2^l;
+        data(:,i) = datastrip(length(X)/4+j:3*length(X)/4-1+j);
+    end
+
+    v = data(:, length(D)/2 + 1);   
+    A3M = (1/n)*2^(-l) * ((data .* v)' * data); 
+
+catch ME
+    if strcmp(ME.identifier,'MATLAB:array:SizeLimitExceeded')
+        fprintf('Vectorized method exceeded memory limits — switching to streaming.\n');
+
+        A3M = zeros(length(D));
+        j = length(D)/2 + 1;
+        datastrip_trunc = datastrip(length(X)/4+j:3*length(X)/4-1+j);
+       
+        for i = 1:length(D) 
+            ii = D(i)*(2^l);
+            di = datastrip_trunc .* datastrip(length(X)/4+ii:3*length(X)/4-1+ii);
+            for  j = 1:length(D)/2
+                jj = D(i)*2^l;
+                A3M(i,j) = 2^(-l)*dot(di,...
+                    datastrip(length(X)/4+jj:3*length(X)/4-1+jj));
+            end
+        end
+    else
+        rethrow(ME);
+    end
+end
+fprintf('A3M constructed. \n');
+toc
+%%  UNBIASING  
+
+covr = @(x) (sigma^2)*exp(-abs(x).^2./(2*lambda^2)); 
+u = covr(D)*integral(f,-1,1);
+A3M = A3M-u-u'-(integral(f,-1,1)*covr(D-D'));
+%% PADDING A3M AND MAPPING INTO FREQUENCY 
+
+n1 = length(D);
+n2 = length(Dext);
+nside = (n2-n1)/2;
+A3M_padded = [zeros(nside,n2); zeros(n1,nside) A3M zeros(n1,nside); zeros(nside,n2)];
+
+F = dftmtx(length(Dext));
+A3M_ft = center_BS(F'*center_BS(A3M_padded)*F);
+
+
+%% DOING KOTLARSKI NOW
+
+psihat = A3M_ft;
+% Doing Kotlarski's identity EMPIRICALLY
+
+[empx, empy] = gradient(psihat, wgap);
+
+adx = diag(empx); 
+ad_emp = diag(psihat);
+
+integrand_emp = adx./ad_emp; integrand_emp = integrand_emp';
+
+rec_emp = zeros(1,length(Wext)/2);
+rec_emp(1) = 0;
+for j = 2:length(Wext)/2
+    rec_emp(j) = rec_emp(j-1) + wgap*integrand_emp( length(Wext)/2 +j);
+end
+
+r = .00001; h = 0.05;
+psireg = psihat./(L*min(ones(length(Wext))/L, r*sqrt(n)*abs(psihat)));
+
+ad_reg = diag(psireg);
+integrand_reg = adx./ad_reg; integrand_reg = integrand_reg';
+
+rec_reg = zeros(1,length(Wext)/2);
+rec_reg(1) = 0;
+for j = 2:length(Wext)/2
+    rec_reg(j) = rec_reg(j-1) + wgap*integrand_reg( length(Wext)/2 +j);
+end
+
+rec1_reg = (exp(rec_reg)); 
+
+plotting = symfft(f(Dext));
+plotting = plotting ./plotting(length(Dext)/2+1);
+recfft = [conj(flip(rec1_reg)) (rec1_reg)];
+l8_freq_rel_err = max(abs(recfft - plotting))/max(abs(plotting));
+
+%hfix recovery in space now
+phiK = @(w) 1 .* (-1 <= w & w <= 1);
+
+
+rec = zeros(1, length(Dext));
+for j = 1:length(Dext)
+    rec(j) = (wgap/(2*pi)).* sum(exp(1i.*Wext*Dext(j)).*...
+        recfft .* phiK(h*Wext));
+end
+t = length(D)/2;  
+tt = length(Dext)/2;
+rec_trunc = real(rec(tt-t+1:tt+t)); %choosing real here should be ok
+recspace = rec_trunc/max(abs(rec_trunc));
+
+l8_hfix_space_err = max(abs(recspace-f(D)))/max(abs(f(D)));
+
+%% FINAL PLOTTING 
+figure
+plot(Wext(length(Wext)/2:end), real(plotting(length(plotting)/2:end)))
+hold on
+plot(Wext(length(Wext)/2:end), real(recfft(length(recfft)/2:end)))
+plot(Wext(length(Wext)/2:end), imag(recfft(length(recfft)/2:end)))
+
+figure
+hold on
+plot(D, recspace)
+plot(D, f(D))
+

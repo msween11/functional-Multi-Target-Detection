@@ -1,8 +1,12 @@
-function [FM_space, FM_freq] = freq_march(params, grids, psireg,f)
+function [FM_space, FM_freq] = freq_march(params, grids, psireg, f, ps)
 
 dd = grids.lenD/2;
 Dd = length(grids.Dext)/2;
-p = circshift(real(diag(psireg)), Dd); %choose psihat here maybe?
+if nargin >= 5 && ~isempty(ps)
+    p = circshift(abs(ps(:)), Dd); % ps has 0 freq at center, shift to match convention; abs guards against negative estimates
+else
+    p = circshift(real(diag(psireg)), Dd); %choose psihat here maybe?
+end
 
 phases = phases_from_bispectrum_FM_real(center_BS(psireg));
 FM_freq = sqrt(p).*phases;
